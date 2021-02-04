@@ -8,6 +8,11 @@ Code associated with formulating, implementing, and visualizing an analysis of w
  
  <br/>
  
+ * `WildBoarIPM_InitialValuesSim.R` <br/>
+ Code for simulating initial values for running the IPM. 
+ 
+ <br/>
+ 
  * `WildBoarIPM_MCMCsamples.RData` <br/>
  R object containing posterior samples from four chains of the run model (coda MCMC format)
  
