@@ -16,7 +16,7 @@ Code associated with formulating, implementing, and visualizing an analysis of w
    
  * `WildBoarIPM_Plots.R` <br/>
  Code for visualizing model results and generating the component plots for the figures included in the manuscript. <br/>
- Running requires posterior samples from the run model (`WildBoarIPM_MCMCsamples.RData`), which can be downloaded from:https://mycore.core-cloud.net/index.php/s/vYfxlaDvpmkoJG9
+ Running requires posterior samples from the run model (`WildBoarIPM_MCMCsamples.RData`), which can be downloaded from: https://mycore.core-cloud.net/index.php/s/vYfxlaDvpmkoJG9
  <br/>
  
  ## Data availability
