@@ -332,7 +332,7 @@ pB.ddata <- data.frame(
                out.mat[,'Mu.pB[3, 2]'],
                out.mat[,'Mu.pB[3, 3]']),
   SizeClass = rep(c('Small', 'Medium', 'Large'), each = nrow(out.mat)*3),
-  AcornAbundance = rep(rep(c('N', 'AA', 'A'), each = nrow(out.mat)), 3)
+  AcornAbundance = rep(rep(c('N', 'A', 'H'), each = nrow(out.mat)), 3)
 )
 
 
