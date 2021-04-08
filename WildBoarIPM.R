@@ -100,8 +100,8 @@ for (i in 1:n){
 
 ## Make categorical acorn covariate
 # 1 = N (no acorn production)
-# 2 = AA (average acorn production) 
-# 3 = A (high acorn production)
+# 2 = A (average acorn production) 
+# 3 = H (high acorn production)
 
 AcornData <- data.frame(
   Year = 1983:2016, 
