@@ -115,8 +115,8 @@ WB.IPM.inits <- function(model, const.N1, const.marProps, extra.N) {
   marN <- array(0, dim = c(Z, 2 * Z, Tmax))
   octN <- array(0, dim = c(Z, 2 * Z, Tmax))
   N <- matrix(NA, nrow = Z, ncol = Tmax)
-  Off <- matrix(NA, nrow = Z, ncol = Tmax)
-  YOY <- YOY.all <- rep(NA, Tmax)
+  Off <- matrix(NA, nrow = Z, ncol = Tmax-1)
+  YOY <- YOY.all <- rep(NA, Tmax-1)
   
   N[1:Z, 1] <- c(const.N1[1], const.N1[2], const.N1[3])
   
@@ -129,9 +129,9 @@ WB.IPM.inits <- function(model, const.N1, const.marProps, extra.N) {
     ## a.1) Assume true number of individuals harvested = number reported
     for (z in 1:Z) {
       if(t < Tmax){
-        H[z, t] <- SaH[z, t]
+        H[z, t] <- SaH[z, t, 1]
       }else{
-        H[z, t] <- round(sum(SaH[z,])/dim(SaH)[2])
+        H[z, t] <- round(sum(SaH[z,,1])/dim(SaH)[2])
         # --> estimating as mean since no data available
       }
       
@@ -283,9 +283,9 @@ WB.IPM.inits.convert <- function(model, const.N1, const.marProps, extra.N) {
   origI <- WB.IPM.inits(model, const.N1, const.marProps, extra.N)
   
   ## Make empty matrices/vectors
-  marN_g <- array(NA, dim = c(Z, Z, Tmax))
+  marN_g <- array(NA, dim = c(Z, Z, Tmax-1))
   marN1_plus <- rep(NA, Tmax)
-  octN_g <- matrix(NA, nrow = Z, ncol = Tmax)
+  octN_g <- matrix(NA, nrow = Z, ncol = Tmax-1)
   gP <- matrix(NA, nrow = Z-1, ncol = Tmax)
   gSL <- rep(NA, Tmax)
   Mu.gP <- rep(NA, Z-1)
@@ -293,7 +293,7 @@ WB.IPM.inits.convert <- function(model, const.N1, const.marProps, extra.N) {
   ## Convert March population census values
   marN <- origI$N
   
-  for(t in 1:Tmax){
+  for(t in 1:(Tmax-1)){
     
     ## Extract post-growth march census values
     marN_g[1:Z, 1:Z, t] <- origI$octN[1:Z, 1:Z, t] + origI$octN[1:Z, (1:Z)+Z, t]
@@ -303,6 +303,9 @@ WB.IPM.inits.convert <- function(model, const.N1, const.marProps, extra.N) {
     for(z in 1:Z){		
       octN_g[z, t] <- sum(origI$octN[1:Z, z, t])
     }
+  }
+  
+  for(t in 1:Tmax){
     
     ## Extract time-dependent binomial growth parameters
     gP[1, t] <- sum(origI$G[1, 2:3, t])
@@ -342,5 +345,41 @@ WB.IPM.inits.convert <- function(model, const.N1, const.marProps, extra.N) {
     Mu.gP = Mu.gP, sigma.gP = sigma.gP, epsilon.gP = epsilon.gP,
     Mu.gSL = Mu.gSL, sigma.gSL = sigma.gSL, epsilon.gSL = epsilon.gSL,
     x = state.inits(mydata, first)
+  ))
+}
+
+## Function to duplicate initial values for assigning identical inital values to 
+## female and male parameters
+
+## NOTE: This only works for the test situation which duplicates female data to 
+##       "simulate" male data. 
+##       For including actual male data, the initial value simulation functions
+##       above will need to be updated.
+
+inits.duplicate <- function(Inits){
+  
+  Off_tot <- Inits$Off*2
+  Off <- cbind(colSums(Inits$Off), colSums(Inits$Off))
+  
+  return(list(
+    marN = abind::abind(Inits$marN, Inits$marN, along = 3), 
+    initN = cbind(Inits$marN[,1], Inits$marN[,1]),
+    marN_g = abind::abind(Inits$marN_g, Inits$marN_g, along = 4),
+    marN1_plus = cbind(Inits$marN1_plus, Inits$marN1_plus),
+    octN_g = abind::abind(Inits$octN_g, Inits$octN_g, along = 3),
+    H = abind::abind(Inits$H, Inits$H, along = 3), 
+    Off_tot = Off_tot, 
+    Off = Off,
+    YOY = cbind(Inits$YOY, Inits$YOY), 
+    Mu.ll = rep(Inits$Mu.ll, 2), sigma.ll = rep(Inits$sigma.ll, 2), epsilon.ll = cbind(Inits$epsilon.ll, Inits$epsilon.ll),
+    Mu.pp = cbind(Inits$Mu.pp, Inits$Mu.pp), sigma.pp = rep(Inits$sigma.pp, 2), epsilon.pp = cbind(Inits$epsilon.pp, Inits$epsilon.pp),
+    Mu.mH = cbind(Inits$Mu.mH, Inits$Mu.mH), sigma.mH = rep(Inits$sigma.mH, 2), epsilon.mH = cbind(Inits$epsilon.mH, Inits$epsilon.mH),
+    Mu.pB = Inits$Mu.pB, sigma.pB = Inits$sigma.pB, epsilon.pB = Inits$epsilon.pB, 
+    Mu.nF = Inits$Mu.nF, sigma.nF = Inits$sigma.nF, epsilon.nF = Inits$epsilon.nF,
+    Mu.m0 = rep(Inits$Mu.m0, 2), sigma.m0 = rep(Inits$sigma.m0, 2), epsilon.m0 = cbind(Inits$epsilon.m0, Inits$epsilon.m0),
+    Mu.mN = cbind(Inits$Mu.mN, Inits$Mu.mN), sigma.mN = rep(Inits$sigma.mN, 2), epsilon.mN = cbind(Inits$epsilon.mN, Inits$epsilon.mN),	
+    Mu.gP = cbind(Inits$Mu.gP, Inits$Mu.gP), sigma.gP = cbind(Inits$sigma.gP, Inits$Mu.gP), epsilon.gP = abind::abind(Inits$epsilon.gP,Inits$epsilon.gP, along = 3),
+    Mu.gSL = rep(Inits$Mu.gSL, 2), sigma.gSL = rep(Inits$sigma.gSL, 2), epsilon.gSL = cbind(Inits$epsilon.gSL,Inits$epsilon.gSL),
+    x = Inits$x
   ))
 }

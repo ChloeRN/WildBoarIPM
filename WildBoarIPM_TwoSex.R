@@ -5,6 +5,10 @@ nimbleOptions(disallow_multivariate_argument_expressions = FALSE)
 ## Set seed
 mySeed <- 0
 
+## Set switch for model testing (TRUE = model run with only a subset CMRR data)
+modelTest <- TRUE
+#modelTest <- FALSE
+
 #******************************************************************************#
 #* DATA PREPARATION 
 #******************************************************************************#
@@ -33,10 +37,18 @@ yHS <- c(166, 94, 49, 85, 124, 198, 139, 116, 112, 177, 143, 170, 224, 173, 184,
 yHM <-c(56, 71, 31, 31, 75, 127, 53, 108, 100, 58, 68, 125, 99, 66, 78, 68, 187, 118, 64, 83, 108, 91, 31, 102, 69, 45)
 yHL <- c(34, 34, 15, 20, 57, 90, 63, 51, 65, 39, 51, 46, 75, 31, 19, 36, 42, 38, 59, 42, 33, 32, 34, 31, 70, 33)
 
+# Numbers of males (small, medium, large) harvested between 1991 and 2016)
+# NOTE: Data assumed identical to data for females for now
+yHS_m <- yHS
+yHM_m <- yHM
+yHL_m <- yHL
 
-## Assemble Size-at-Harvest matrix
-SaH <- rbind(yHS, yHM, yHL)
-#dimnames(SaH) <- list(c("Small", "Medium", "Large"), c(1991:2016))
+
+## Assemble two-sex Size-at-Harvest matrix
+SaH <- array(NA, dim = c(3, length(yHS), 2))
+SaH[,,1] <- rbind(yHS, yHM, yHL)
+SaH[,,2] <- rbind(yHS_m, yHM_m, yHL_m)
+dimnames(SaH) <- list(c("Small", "Medium", "Large"), c(1991:2016), c('F', 'M'))
 
 
 ## Set number of years in size-at-harvest data
@@ -66,6 +78,18 @@ table(mydata)
 # Remove individual 39
 mydata <- mydata[-39,]
 # --> Gets dropped because it's harvested twice (error)
+
+# Trim CMRR data (for model testing only)
+if(modelTest){
+  select.ind <- sample(1:dim(mydata)[1], 500, replace = F)
+  mydata <- mydata[select.ind,]
+}
+
+# Duplicate CMRR data to simulate (identical) male capture histories
+mydata <- rbind(mydata, mydata)
+
+# Make vector for sex information for CMRR data
+CH.sex <- rep(c(1, 2), each = dim(mydata)[1]/2)
 
 # Re-define states to reflect implemented CMRR model structure
 # 1 = captured alive, small
@@ -121,7 +145,7 @@ WB.data <- list(SaH = SaH,
 				        nRep = nRep, nFemS = nFemS) 
 
 WB.constants <- list(Tmax = nyears, Z = dim(SaH)[[1]],
-					           n.ind = n, first = first, last = last,
+					           n.ind = n, first = first, last = last, CH.sex = CH.sex,
                      AcornCat = AcornData$AcornLevel) 
 
 
@@ -152,40 +176,49 @@ WB.code <- nimbleCode({
   for(t in 1:Tmax){
     for(z in 1:Z){
       
-      # Number of offpring produced by mothers in size class z
-      Off[z,t] ~ dpois(marN[z,t]*pB[z,t]*0.5*nF[z,t])    
+      # Number of offpring (both sexes) produced by mothers in size class z
+      Off_tot[z,t] ~ dpois(marN[z,t,1]*pB[z,t]*nF[z,t])    
     }
     
-    # Number of produced offspring recruiting into the population    
-    YOY[t] ~ dbin(s0[t], sum(Off[1:Z,t]))
-
+    # Number of offspring of each sex
+    Off[t,1] ~ dbin(0.5, sum(Off_tot[1:Z,t])) # Females
+    Off[t,2] <- sum(Off_tot[1:Z,t]) - Off[t,1] # Males
+    
+    # Number of produced offspring recruiting into the population
+    for(s in 1:2){
+      YOY[t,s] ~ dbin(s0[t,s], Off[t,s])
+    }
   }
   
-  Off[1:Z, Tmax+1] <- 0
   
   #-------------#
   # 1.2) Growth #
   #-------------#
   
-  for(t in 1:Tmax){
-
-  	# Size class 1 - grow vs. not grow
-  	marN1_plus[t] ~ dbin(gP[1,t], marN[1,t] + YOY[t]) # Size 1 growing to any size > 1
-  	marN_g[1,1,t] <- (marN[1,t] + YOY[t]) - marN1_plus[t] # Size 1 remaining size 1
-  	
-  	# Size class 1 - grow to size class 2 vs. 3 (given growth)
-  	marN_g[1,3,t] ~ dbin(gSL[t], marN1_plus[t]) # Growing size 1 entering size 3
-  	marN_g[1,2,t] <- marN1_plus[t] - marN_g[1,3,t] # Growing size 1 entering size 2
-  	
-  	# Size class 2 - grow to size class 3 vs. not grow
-  	marN_g[2,3,t] ~ dbin(gP[2,t], marN[2,t]) # Size 2 growing to size 3
-  	marN_g[2,2,t] <-  marN[2,t] - marN_g[2,3,t] # Size 2 remaining size 2
-  	marN_g[2,1,t] <- 0
-  	
-  	# Size class 3 - no growth
-  	marN_g[3,3,t] <- marN[3,t] # Size 3 remaining size 3
-  	marN_g[3,1:2,t] <- 0	
+  for(s in 1:2){
+    for(t in 1:Tmax){
+      
+      # Size class 1 - grow vs. not grow
+      marN1_plus[t,s] ~ dbin(gP[1,t,s], marN[1,t,s] + YOY[t,s]) # Size 1 growing to any size > 1
+      marN_g[1,1,t,s] <- (marN[1,t,s] + YOY[t,s]) - marN1_plus[t,s] # Size 1 remaining size 1
+      
+      # Size class 1 - grow to size class 2 vs. 3 (given growth)
+      marN_g[1,3,t,s] ~ dbin(gSL[t,s], marN1_plus[t,s]) # Growing size 1 entering size 3
+      marN_g[1,2,t,s] <- marN1_plus[t,s] - marN_g[1,3,t,s] # Growing size 1 entering size 2
+      
+      # Size class 2 - grow to size class 3 vs. not grow
+      marN_g[2,3,t,s] ~ dbin(gP[2,t,s], marN[2,t,s]) # Size 2 growing to size 3
+      marN_g[2,2,t,s] <-  marN[2,t,s] - marN_g[2,3,t,s] # Size 2 remaining size 2
+      marN_g[2,1,t,s] <- 0
+      
+      # Size class 3 - no growth
+      marN_g[3,3,t,s] <- marN[3,t,s] # Size 3 remaining size 3
+      #marN_g[3,1:2,t,s] <- 0
+      marN_g[3,2,t,s] <- 0
+      marN_g[3,1,t,s] <- 0
+    }
   }
+ 
   
   ## NOTE:
   # Ideally, growth (state transition) would be modelled using a multinomial likelihood.
@@ -197,27 +230,35 @@ WB.code <- nimbleCode({
   # 1.3) Non-harvest season (Mar-Sep) #
   #-----------------------------------#
   
-  for(t in 1:Tmax){
-  	for(z in 1:Z){
-  		octN_g[z,t] ~ dbin(sN[z,t], sum(marN_g[1:Z,z,t])) # Survivors
-  	}
+  for(s in 1:2){
+    for(t in 1:Tmax){
+      for(z in 1:Z){
+        octN_g[z,t,s] ~ dbin(sN[z,t,s], sum(marN_g[1:Z,z,t,s])) # Survivors
+      }
+    }
   }
-  
   
   #-------------------------------#
   # 1.4) Harvest season (Oct-Mar) #
   #-------------------------------#
   
-  for(t in 1:Tmax){
-  	for(z in 1:Z){
-  		marN[z,t+1] ~ dbin(sH[z,t], octN_g[z,t]) # Survivors
-  		H[z,t+1] <- octN_g[z,t] - marN[z,t+1] # Harvests
-  	}
+  for(s in 1:2){
+    for(t in 1:Tmax){
+      for(z in 1:Z){
+        marN[z,t+1,s] ~ dbin(sH[z,t,s], octN_g[z,t,s]) # Survivors
+        H[z,t+1,s] <- octN_g[z,t,s] - marN[z,t+1,s] # Harvests
+      }
+    }
   }
-  
-  H[1:Z,1] <- 0
-  
-  
+
+  #H[1:Z,1,1] <- 0
+  H[1,1,1] <- 0
+  H[2,1,1] <- 0
+  H[3,1,1] <- 0
+  #H[1:Z,1,2] <- 0
+  H[1,1,2] <- 0
+  H[2,1,2] <- 0
+  H[3,1,2] <- 0
   
   #############################
   # 2) SIZE-AT-HARVEST MODULE #
@@ -230,12 +271,14 @@ WB.code <- nimbleCode({
   # H[z,t] = number of size class z individuals harvested in the Oct[t-1] to Feb[t] harvest season
   # ll[z,t] = recovery rate of size class z individuals harvested in the Oct[t-1] to Feb[t] harvest season
   
-  for(t in 2:Tmax){
-    for(z in 1:Z){
-      SaH[z,t] ~ dbin(ll[z,t], H[z,t])
+  for(s in 1:2){
+    for(t in 2:Tmax){
+      for(z in 1:Z){
+        SaH[z,t,s] ~ dbin(ll[z,t,s], H[z,t,s])
+      }
     }
   }
-  
+
   
   
   #####################################
@@ -262,98 +305,158 @@ WB.code <- nimbleCode({
   # 6 = newly dead (harvest), large
   # 7 = dead (includes newly dead from non-harvest causes)
   
-  for(t in 1:Tmax){
+  for(s in 1:2){
+    for(t in 1:Tmax){
+      
+      # Alive transitions (stochastic)
+      
+      ps[1,1,t,s] <- (1-gP[1,t,s])*sN[1,t,s]*sH[1,t,s] 
+      ps[1,2,t,s] <- gP[1,t,s]*(1-gSL[t,s])*sN[2,t,s]*sH[2,t,s]
+      ps[1,3,t,s] <- gP[1,t,s]*gSL[t,s]*sN[3,t,s]*sH[3,t,s]
+      ps[1,4,t,s] <- (1-gP[1,t,s])*sN[1,t,s]*(1-sH[1,t,s])
+      ps[1,5,t,s] <- gP[1,t,s]*(1-gSL[t,s])*sN[2,t,s]*(1-sH[2,t,s]) 
+      ps[1,6,t,s] <- gP[1,t,s]*gSL[t,s]*sN[3,t,s]*(1-sH[3,t,s]) 
+      ps[1,7,t,s] <- 1-sum(ps[1,1:6,t,s])
+      
+      ps[2,1,t,s] <- 0 
+      ps[2,2,t,s] <- (1-gP[2,t,s])*sN[2,t,s]*sH[2,t,s]
+      ps[2,3,t,s] <- gP[2,t,s]*sN[3,t,s]*sH[3,t,s] 
+      ps[2,4,t,s] <- 0
+      ps[2,5,t,s] <- (1-gP[2,t,s])*sN[2,t,s]*(1-sH[2,t,s]) 
+      ps[2,6,t,s] <- gP[2,t,s]*sN[3,t,s]*(1-sH[3,t,s]) 
+      ps[2,7,t,s] <- 1-sum(ps[2,1:6,t,s])
+      
+      ps[3,1,t,s] <- 0 
+      ps[3,2,t,s] <- 0
+      ps[3,3,t,s] <- sN[3,t,s]*sH[3,t,s]
+      ps[3,4,t,s] <- 0 
+      ps[3,5,t,s] <- 0
+      ps[3,6,t,s] <- sN[3,t,s]*(1-sH[3,t,s])
+      ps[3,7,t,s] <- 1-sum(ps[3,1:6,t,s])
+      
+      
+      # Dead transitions (deterministic)
+      
+      #ps[4,1:6,t,s] <- 0
+      ps[4,1,t,s] <- 0
+      ps[4,2,t,s] <- 0
+      ps[4,3,t,s] <- 0
+      ps[4,4,t,s] <- 0
+      ps[4,5,t,s] <- 0
+      ps[4,6,t,s] <- 0
+      ps[4,7,t,s] <- 1
+      
+      #ps[5,1:6,t,s] <- 0
+      ps[5,1,t,s] <- 0
+      ps[5,2,t,s] <- 0
+      ps[5,3,t,s] <- 0
+      ps[5,4,t,s] <- 0
+      ps[5,5,t,s] <- 0
+      ps[5,6,t,s] <- 0
+      ps[5,7,t,s] <- 1
+      
+      #ps[6,1:6,t,s] <- 0
+      ps[6,1,t,s] <- 0
+      ps[6,2,t,s] <- 0
+      ps[6,3,t,s] <- 0
+      ps[6,4,t,s] <- 0
+      ps[6,5,t,s] <- 0
+      ps[6,6,t,s] <- 0
+      ps[6,7,t,s] <- 1
+      
+      #ps[7,1:6,t,s] <- 0
+      ps[7,1,t,s] <- 0
+      ps[7,2,t,s] <- 0
+      ps[7,3,t,s] <- 0
+      ps[7,4,t,s] <- 0
+      ps[7,5,t,s] <- 0
+      ps[7,6,t,s] <- 0
+      ps[7,7,t,s] <- 1
+      
+    }
     
-    # Alive transitions (stochastic)
     
-    ps[1,1,t] <- (1-gP[1,t])*sN[1,t]*sH[1,t] 
-    ps[1,2,t] <- gP[1,t]*(1-gSL[t])*sN[2,t]*sH[2,t]
-    ps[1,3,t] <- gP[1,t]*gSL[t]*sN[3,t]*sH[3,t]
-    ps[1,4,t] <- (1-gP[1,t])*sN[1,t]*(1-sH[1,t])
-    ps[1,5,t] <- gP[1,t]*(1-gSL[t])*sN[2,t]*(1-sH[2,t]) 
-    ps[1,6,t] <- gP[1,t]*gSL[t]*sN[3,t]*(1-sH[3,t]) 
-    ps[1,7,t] <- 1-sum(ps[1,1:6,t])
+    #------------------------#
+    # 3.2) Obervation matrix #
+    #------------------------#
     
-    ps[2,1,t] <- 0 
-    ps[2,2,t] <- (1-gP[2,t])*sN[2,t]*sH[2,t]
-    ps[2,3,t] <- gP[2,t]*sN[3,t]*sH[3,t] 
-    ps[2,4,t] <- 0
-    ps[2,5,t] <- (1-gP[2,t])*sN[2,t]*(1-sH[2,t]) 
-    ps[2,6,t] <- gP[2,t]*sN[3,t]*(1-sH[3,t]) 
-    ps[2,7,t] <- 1-sum(ps[2,1:6,t])
+    # Observations
+    # 1 = captured alive, small
+    # 2 = captured alive, medium
+    # 3 = captured alive, large
+    # 4 = reported dead (harvest), small
+    # 5 = reported dead (harvest), medium
+    # 6 = reported dead (harvest), large
+    # 7 = not observed
     
-    ps[3,1,t] <- 0 
-    ps[3,2,t] <- 0
-    ps[3,3,t] <- sN[3,t]*sH[3,t]
-    ps[3,4,t] <- 0 
-    ps[3,5,t] <- 0
-    ps[3,6,t] <- sN[3,t]*(1-sH[3,t])
-    ps[3,7,t] <- 1-sum(ps[3,1:6,t])
-    
-    
-    # Dead transitions (deterministic)
-    
-    ps[4,1:6,t] <- 0
-    ps[4,7,t] <- 1
-    
-    ps[5,1:6,t] <- 0
-    ps[5,7,t] <- 1
-    
-    ps[6,1:6,t] <- 0
-    ps[6,7,t] <- 1
-    
-    ps[7,1:6,t] <- 0
-    ps[7,7,t] <- 1
-    
-  }
-  
-  
-  #------------------------#
-  # 3.2) Obervation matrix #
-  #------------------------#
-  
-  # Observations
-  # 1 = captured alive, small
-  # 2 = captured alive, medium
-  # 3 = captured alive, large
-  # 4 = reported dead (harvest), small
-  # 5 = reported dead (harvest), medium
-  # 6 = reported dead (harvest), large
-  # 7 = not observed
-  
-  for(t in 2:Tmax){
-    
-    po[1,1,t] <- pp[1,t]
-    po[1,2:6,t] <- 0
-    po[1,7,t] <- 1-pp[1,t]
-    
-    po[2,1,t] <- 0
-    po[2,2,t] <- pp[2,t]
-    po[2,3:6,t] <- 0
-    po[2,7,t] <- 1-pp[2,t]
-    
-    po[3,1:2,t] <- 0
-    po[3,3,t] <- pp[3,t]
-    po[3,4:6,t] <- 0
-    po[3,7,t] <- 1-pp[3,t]
-    
-    po[4,1:3,t] <- 0
-    po[4,4,t] <- ll[1,t]
-    po[4,5:6,t] <- 0
-    po[4,7,t] <- 1-ll[1,t]
-    
-    po[5,1:4,t] <- 0
-    po[5,5,t] <- ll[2,t]
-    po[5,6,t] <- 0
-    po[5,7,t] <- 1-ll[2,t]
-    
-    po[6,1:5,t] <- 0
-    po[6,6,t] <- ll[3,t]
-    po[6,7,t] <- 1-ll[3,t]
-    
-    po[7,1:6,t] <- 0
-    po[7,7,t] <- 1
-    
+    for(t in 1:Tmax){
+      
+      po[1,1,t,s] <- pp[1,t,s]
+      #po[1,2:6,t,s] <- 0
+      po[1,2,t,s] <- 0
+      po[1,3,t,s] <- 0
+      po[1,4,t,s] <- 0
+      po[1,5,t,s] <- 0
+      po[1,6,t,s] <- 0
+      po[1,7,t,s] <- 1-pp[1,t,s]
+      
+      po[2,1,t,s] <- 0
+      po[2,2,t,s] <- pp[2,t,s]
+      #po[2,3:6,t,s] <- 0
+      po[2,3,t,s] <- 0
+      po[2,4,t,s] <- 0
+      po[2,5,t,s] <- 0
+      po[2,6,t,s] <- 0
+      po[2,7,t,s] <- 1-pp[2,t,s]
+      
+      #po[3,1:2,t,s] <- 0
+      po[3,1,t,s] <- 0
+      po[3,2,t,s] <- 0
+      po[3,3,t,s] <- pp[3,t,s]
+      #po[3,4:6,t,s] <- 0
+      po[3,4,t,s] <- 0
+      po[3,5,t,s] <- 0
+      po[3,6,t,s] <- 0
+      po[3,7,t,s] <- 1-pp[3,t,s]
+      
+      #po[4,1:3,t,s] <- 0
+      po[4,1,t,s] <- 0
+      po[4,2,t,s] <- 0
+      po[4,3,t,s] <- 0
+      po[4,4,t,s] <- ll[1,t,s]
+      #po[4,5:6,t,s] <- 0
+      po[4,5,t,s] <- 0
+      po[4,6,t,s] <- 0
+      po[4,7,t,s] <- 1-ll[1,t,s]
+      
+      #po[5,1:4,t,s] <- 0
+      po[5,1,t,s] <- 0
+      po[5,2,t,s] <- 0
+      po[5,3,t,s] <- 0
+      po[5,4,t,s] <- 0
+      po[5,5,t,s] <- ll[2,t,s]
+      po[5,6,t,s] <- 0
+      po[5,7,t,s] <- 1-ll[2,t,s]
+      
+      #po[6,1:5,t,s] <- 0
+      po[6,1,t,s] <- 0
+      po[6,2,t,s] <- 0
+      po[6,3,t,s] <- 0
+      po[6,4,t,s] <- 0
+      po[6,5,t,s] <- 0
+      po[6,6,t,s] <- ll[3,t,s]
+      po[6,7,t,s] <- 1-ll[3,t,s]
+      
+      #po[7,1:6,t,s] <- 0
+      po[7,1,t,s] <- 0
+      po[7,2,t,s] <- 0
+      po[7,3,t,s] <- 0
+      po[7,4,t,s] <- 0
+      po[7,5,t,s] <- 0
+      po[7,6,t,s] <- 0
+      po[7,7,t,s] <- 1
+      
+    }
   }
   
   
@@ -370,10 +473,10 @@ WB.code <- nimbleCode({
   	for(t in (first[i]+1):last[i]){
   		
   		# State process: draw x(t) given x(t-1)
-  		x[i, t] ~ dcat(ps[x[i, t-1], 1:7, t-1])
+  		x[i, t] ~ dcat(ps[x[i, t-1], 1:7, t-1, CH.sex[i]])
   		
   		# Observation process: draw y(t) given x(t)
-  		y[i, t] ~ dcat(po[x[i, t], 1:7, t])
+  		y[i, t] ~ dcat(po[x[i, t], 1:7, t, CH.sex[i]])
   	}
   	
   }
@@ -423,82 +526,88 @@ WB.code <- nimbleCode({
   # 5.1) Mortality parameters #
   #---------------------------#
   
-  for(z in 1:Z){
+  for(s in 1:2){
+    for(z in 1:Z){
+      
+      sN[z,1:Tmax,s] <- exp(-mN[z,1:Tmax,s])
+      sH[z,1:Tmax,s] <- exp(-mH[z,1:Tmax,s])
+      
+      log(mN[z,1:Tmax,s]) <- log(Mu.mN[z,s]) + epsilon.mN[1:Tmax,s]
+      log(mH[z,1:Tmax,s]) <- log(Mu.mH[z,s]) + epsilon.mH[1:Tmax,s]
+      
+      Mu.mN[z,s] ~ dunif(0, 5)
+      Mu.mH[z,s] ~ dunif(0, 5)
+      
+    }
     
-    sN[z,1:Tmax] <- exp(-mN[z,1:Tmax])
-    sH[z,1:Tmax] <- exp(-mH[z,1:Tmax])
+    for(t in 1:Tmax){
+      
+      epsilon.mN[t,s] ~ dnorm(0, sd = sigma.mN[s])
+      epsilon.mH[t,s] ~ dnorm(0, sd = sigma.mH[s])
+    }
     
-    log(mN[z,1:Tmax]) <- log(Mu.mN[z]) + epsilon.mN[1:Tmax]
-    log(mH[z,1:Tmax]) <- log(Mu.mH[z]) + epsilon.mH[1:Tmax]
-    
-    Mu.mN[z] ~ dunif(0, 5)
-    Mu.mH[z] ~ dunif(0, 5)
-    
+    sigma.mN[s] ~ dunif(0, 5)
+    sigma.mH[s] ~ dunif(0, 5)
   }
-  
-  for(t in 1:Tmax){
-    
-    epsilon.mN[t] ~ dnorm(0, sd = sigma.mN)
-    epsilon.mH[t] ~ dnorm(0, sd = sigma.mH)
-  }
-  
-  sigma.mN ~ dunif(0, 5)
-  sigma.mH ~ dunif(0, 5)
   
   
   #------------------------#
   # 5.2) Growth parameters #
   #------------------------#
   
-  for(z in 1:(Z-1)){
-  	
-  	logit(gP[z,1:Tmax]) <- logit(Mu.gP[z]) + epsilon.gP[z,1:Tmax]
-
-  	Mu.gP[z] ~ dunif(0, 1)
-  	sigma.gP[z] ~ dunif(0, 5)
-  }
-  
-  
-  for(t in 1:Tmax){
+  for(s in 1:2){
+    for(z in 1:(Z-1)){
+      
+      logit(gP[z,1:Tmax,s]) <- logit(Mu.gP[z,s]) + epsilon.gP[z,1:Tmax,s]
+      
+      Mu.gP[z,s] ~ dunif(0, 1)
+      sigma.gP[z,s] ~ dunif(0, 5)
+    }
     
-  	for(z in 1:(Z-1)){
-  		epsilon.gP[z,t] ~ dnorm(0, sd = sigma.gP[z])
-  	}
     
-    epsilon.gSL[t] ~ dnorm(0, sd = sigma.gSL)
+    for(t in 1:Tmax){
+      
+      for(z in 1:(Z-1)){
+        epsilon.gP[z,t,s] ~ dnorm(0, sd = sigma.gP[z,s])
+      }
+      
+      epsilon.gSL[t,s] ~ dnorm(0, sd = sigma.gSL[s])
+    }
+    
+    logit(gSL[1:Tmax,s]) <- logit(Mu.gSL[s]) + epsilon.gSL[1:Tmax,s]
+    
+    Mu.gSL[s] ~ dunif(0, 1)
+    sigma.gSL[s] ~ dunif(0, 5)
   }
-  
-  logit(gSL[1:Tmax]) <- logit(Mu.gSL) + epsilon.gSL[1:Tmax]
-  
-  Mu.gSL ~ dunif(0, 1)
-  sigma.gSL ~ dunif(0, 5)
   
   
   #------------------------------------#
   # 5.3) Recapture/Recovery parameters #
   #------------------------------------#
   
-  for(z in 1:Z){
+  for(s in 1:2){
+    for(z in 1:Z){
+      
+      logit(pp[z,1:Tmax,s]) <- logit(Mu.pp[z,s]) + epsilon.pp[1:Tmax,s]
+      
+      logit(ll[z,1:Tmax,s]) <- logit(Mu.ll[s]) + epsilon.ll[1:Tmax,s]
+      
+      Mu.pp[z,s] ~ dunif(0, 1)
+    }
     
-    logit(pp[z,1:Tmax]) <- logit(Mu.pp[z]) + epsilon.pp[1:Tmax]
+    Mu.ll[s] ~ dunif(0, 1)
     
-    logit(ll[z,1:Tmax]) <- logit(Mu.ll) + epsilon.ll[1:Tmax]
     
-    Mu.pp[z] ~ dunif(0, 1)
+    for(t in 1:Tmax){
+      
+      epsilon.pp[t,s] ~ dnorm(0, sd = sigma.pp[s])
+      epsilon.ll[t,s] ~ dnorm(0, sd = sigma.ll[s])
+    }
+    
+    sigma.pp[s] ~ dunif(0, 5)
+    sigma.ll[s] ~ dunif(0, 5)
   }
-  
-  Mu.ll ~ dunif(0, 1)
 
-  
-  for(t in 1:Tmax){
-    
-    epsilon.pp[t] ~ dnorm(0, sd = sigma.pp)
-    epsilon.ll[t] ~ dnorm(0, sd = sigma.ll)
-  }
-  
-  sigma.pp ~ dunif(0, 5)
-  sigma.ll ~ dunif(0, 5)
-  
   
   #------------------------------#
   # 5.3) Reproduction parameters #
@@ -507,15 +616,15 @@ WB.code <- nimbleCode({
   for(z in 1:Z){
     
     for(t in 1:Tmax){
-    	logit(pB[z,t]) <- logit(Mu.pB[z,AcornCat[t]]) + epsilon.pB[t]
+      logit(pB[z,t]) <- logit(Mu.pB[z,AcornCat[t]]) + epsilon.pB[t]
     }
     
     for(a in 1:3){
-   		Mu.pB[z,a] ~ dunif(0, 1)
+      Mu.pB[z,a] ~ dunif(0, 1)
     }
-
+    
     log(nF[z,1:Tmax]) <- log(Mu.nF[z]) + epsilon.nF[1:Tmax]
-
+    
     Mu.nF[z] ~ dunif(0, 10)
     
   }
@@ -536,26 +645,31 @@ WB.code <- nimbleCode({
   #----------------------------#
   
   ## Initial population sizes
-
-  for(z in 1:Z){
-  	initN[z] ~ T(dnorm(50, 50), 0, Inf)
-  	marN[z,1] <- round(initN[z])
+  for(s in 1:2){
+    for(z in 1:Z){
+      initN[z,s] ~ dlnorm(3.5, 1)
+      marN[z,1,s] <- round(initN[z,s])
+    }
   }
+
   
   
   #----------------------------------------#
   # 5.5) Early survival ('Free' Parameter) #
   #----------------------------------------#
   
-  for(t in 1:Tmax){
-  	
-  	s0[t] <- exp(-m0[t])
-  	log(m0[t]) <- log(Mu.m0) + epsilon.m0[t]
-   	epsilon.m0[t] ~ dnorm(0, sd = sigma.m0)
+  for(s in 1:2){
+    for(t in 1:Tmax){
+      
+      s0[t,s] <- exp(-m0[t,s])
+      log(m0[t,s]) <- log(Mu.m0[s]) + epsilon.m0[t,s]
+      epsilon.m0[t,s] ~ dnorm(0, sd = sigma.m0[s])
+    }
+    
+    Mu.m0[s] ~ dunif(0, 5)
+    sigma.m0[s] ~ dunif(0, 5)
   }
   
-  Mu.m0 ~ dunif(0, 5)
-  sigma.m0 ~ dunif(0, 5)
   
 })
 
@@ -565,7 +679,7 @@ WB.code <- nimbleCode({
 #*******************************************************************************#
 
 ## Load functions for simulating initial values
-source('WildBoarIPM_InitialValuesSim.R')
+source('WildBoarIPM_InitialValuesSim_TwoSex.R')
 
 
 #*******************************************************************************#
@@ -583,22 +697,26 @@ parameters <- c('Mu.mN', 'Mu.mH', 'sigma.mN', 'sigma.mH', 'mN', 'mH',
 				)
 
 ## MCMC settings
-ni <- 150000
-nb <- 70000
+ni <- 10000
+nb <- 50000
 nt <- 10
-nc <- 4
+nc <- 2
 
 ## Sample initial values (4 chains)
-Inits <- list(WB.IPM.inits.convert(model = 'A', const.N1 = c(rowSums(SaH)), const.marProps = diag(3), extra.N = round(c(rowSums(SaH))/5)), 
-              WB.IPM.inits.convert(model = 'A', const.N1 = c(rowSums(SaH)), const.marProps = diag(3), extra.N = round(c(rowSums(SaH))/5)), 
-              WB.IPM.inits.convert(model = 'A', const.N1 = c(rowSums(SaH)), const.marProps = diag(3), extra.N = round(c(rowSums(SaH))/5)),
-              WB.IPM.inits.convert(model = 'A', const.N1 = c(rowSums(SaH)), const.marProps = diag(3), extra.N = round(c(rowSums(SaH))/5)))
+Inits <- list(
+  inits.duplicate(WB.IPM.inits.convert(model = 'A', const.N1 = c(rowSums(SaH)), const.marProps = diag(3), extra.N = round(c(rowSums(SaH))/5))), 
+  inits.duplicate(WB.IPM.inits.convert(model = 'A', const.N1 = c(rowSums(SaH)), const.marProps = diag(3), extra.N = round(c(rowSums(SaH))/5))))
 
 
 #*******************************************************************************#
 #* RUN
 #*******************************************************************************#
 
-WB.IPM <- nimbleMCMC(code = WB.code, constants = WB.constants, data = WB.data, inits = Inits, monitors = parameters, niter = ni, nburnin = nb, nchains = nc, thin = nt, setSeed = mySeed, samplesAsCodaMCMC = TRUE)
+WB.IPM.TwoSex <- nimbleMCMC(code = WB.code, constants = WB.constants, data = WB.data, inits = Inits, monitors = parameters, niter = ni, nburnin = nb, nchains = nc, thin = nt, setSeed = mySeed, samplesAsCodaMCMC = TRUE)
 
-#save(WB.IPM, file = 'WildBoarIPM_MCMCsamples.RData')
+
+saveRDS(WB.IPM.TwoSex, file = 'WildBoarIPM_MCMCsamples.rds')
+
+pdf('WildBoarIPM_TwoSex_traces.pdf', height = 8, width = 11)
+plot(WB.IPM.TwoSex)
+dev.off()
