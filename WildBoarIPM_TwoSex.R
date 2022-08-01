@@ -3,7 +3,7 @@ library(nimble)
 nimbleOptions(disallow_multivariate_argument_expressions = FALSE)
 
 ## Set seed
-mySeed <- 0
+mySeed <- 20
 
 ## Set switch for model testing (TRUE = model run with only a subset CMRR data)
 modelTest <- TRUE
@@ -173,23 +173,38 @@ WB.code <- nimbleCode({
   # YOY[t]: Number of female offspring recruiting into the population as young-og-the year (YOY) in year t
   # s0[t]: New offspring's probability to survive first non-harvest season (year t)
 
+  ## Linked model
   for(t in 1:Tmax){
     for(z in 1:Z){
-      
+
       # Number of offpring (both sexes) produced by mothers in size class z
-      Off_tot[z,t] ~ dpois(marN[z,t,1]*pB[z,t]*nF[z,t])    
+      Off_tot[z,t] ~ dpois(marN[z,t,1]*pB[z,t]*nF[z,t])
     }
-    
+
     # Number of offspring of each sex
     Off[t,1] ~ dbin(0.5, sum(Off_tot[1:Z,t])) # Females
     Off[t,2] <- sum(Off_tot[1:Z,t]) - Off[t,1] # Males
-    
+
     # Number of produced offspring recruiting into the population
     for(s in 1:2){
       YOY[t,s] ~ dbin(s0[t,s], Off[t,s])
     }
   }
   
+  ## Unlinked model (treats m and f as two independent f populations)
+  # for(s in 1:2){
+  #   for(t in 1:Tmax){
+  #     for(z in 1:Z){
+  #       
+  #       # Number of offpring produced by parents in size class z
+  #       Off_tot[z,t,s] ~ dpois(marN[z,t,s]*pB[z,t]*nF[z,t]*0.5)    
+  #     }
+  #     
+  #     # Number of produced offspring recruiting into the population
+  #     YOY[t,s] ~ dbin(s0[t,s], sum(Off_tot[1:Z,t,s]))
+  #   }
+  # }
+
   
   #-------------#
   # 1.2) Growth #
@@ -693,30 +708,162 @@ parameters <- c('Mu.mN', 'Mu.mH', 'sigma.mN', 'sigma.mH', 'mN', 'mH',
 				'Mu.nF', 'sigma.nF', 'Mu.pB', 'sigma.pB', 'pB', 'nF',
 				'Mu.m0', 'sigma.m0', 'm0',
 				'marN', 'marN_g', 'octN_g', 'H', 
-				'Off', 'YOY'
+				#'Off', 
+				'Off_tot', 'YOY'
 				)
 
 ## MCMC settings
-ni <- 10000
+ni <- 100000
 nb <- 50000
 nt <- 10
 nc <- 2
 
-## Sample initial values (4 chains)
+## Sample initial values (2 chains)
 Inits <- list(
   inits.duplicate(WB.IPM.inits.convert(model = 'A', const.N1 = c(rowSums(SaH)), const.marProps = diag(3), extra.N = round(c(rowSums(SaH))/5))), 
   inits.duplicate(WB.IPM.inits.convert(model = 'A', const.N1 = c(rowSums(SaH)), const.marProps = diag(3), extra.N = round(c(rowSums(SaH))/5))))
 
 
+## Reformat initial values for unlinked model
+# for(i in 1:nc){
+#   Inits[[i]]$Off_tot <- abind::abind(Inits[[i]]$Off_tot/2, Inits[[i]]$Off_tot/2, along = 3)
+#   Inits[[i]]$Off <- NULL
+# }
+
 #*******************************************************************************#
 #* RUN
 #*******************************************************************************#
 
+t1 <- Sys.time()
 WB.IPM.TwoSex <- nimbleMCMC(code = WB.code, constants = WB.constants, data = WB.data, inits = Inits, monitors = parameters, niter = ni, nburnin = nb, nchains = nc, thin = nt, setSeed = mySeed, samplesAsCodaMCMC = TRUE)
+t2 <- Sys.time()
+t2-t1
 
-
-saveRDS(WB.IPM.TwoSex, file = 'WildBoarIPM_MCMCsamples.rds')
+saveRDS(WB.IPM.TwoSex, file = 'WildBoarIPM_TwoSex_MCMCsamples.rds')
 
 pdf('WildBoarIPM_TwoSex_traces.pdf', height = 8, width = 11)
 plot(WB.IPM.TwoSex)
 dev.off()
+
+WB.IPM.TwoSex.trim <- mcmc.list(
+  as.mcmc(WB.IPM.TwoSex[[1]][2500:5000, ]),
+  as.mcmc(WB.IPM.TwoSex[[2]][2500:5000, ])
+)
+
+#*******************************************************************************#
+#* COMPARE FEMALE VS. MALE PARAMETERS 
+#*******************************************************************************#
+
+library(reshape2)
+library(ggplot2)
+
+## Set up parameter matching across sexes 
+param.match <- data.frame(
+  Parameter = c(paste0('Mu.mN[',1:3,', 1]'), paste0('Mu.mH[',1:3,', 1]'), 'sigma.mN[1]', 'sigma.mH[1]', 
+                paste0('Mu.gP[',1:2,', 1]'), 'Mu.gSL[1]', 'sigma.gP[1]', 'sigma.gSL[1]', 
+                paste0('Mu.pp[',1:3,', 1]'), 'Mu.ll[1]', 'sigma.pp[1]', 'sigma.ll[1]',
+                'Mu.m0[1]', 'sigma.m0[1]',
+                paste0('marN[1, ', 1:27, ', 1]'), paste0('marN[2, ', 1:27, ', 1]'), paste0('marN[3, ', 1:27, ', 1]'),
+                paste0('H[1, ', 1:26, ', 1]'), paste0('H[2, ', 1:26, ', 1]'), paste0('H[3, ', 1:26, ']'),
+                paste0('Off[', 1:26, ', 1]'), 
+                paste0('YOY[', 1:26, ', 1]'), 
+                
+                paste0('Mu.mN[',1:3,', 2]'), paste0('Mu.mH[',1:3,', 2]'), 'sigma.mN[2]', 'sigma.mH[2]', 
+                paste0('Mu.gP[',1:2,', 2]'), 'Mu.gSL[2]', 'sigma.gP[2]', 'sigma.gSL[2]', 
+                paste0('Mu.pp[',1:3,', 2]'), 'Mu.ll[2]', 'sigma.pp[2]', 'sigma.ll[2]',
+                'Mu.m0[2]', 'sigma.m0[2]',
+                paste0('marN[1, ', 1:27, ', 2]'), paste0('marN[2, ', 1:27, ', 2]'), paste0('marN[3, ', 1:27, ', 2]'),
+                paste0('H[1, ', 1:26, ', 2]'), paste0('H[2, ', 1:26, ', 2]'), paste0('H[3, ', 1:26, ', 2]'),
+                paste0('Off[', 1:26, ', 2]'), 
+                paste0('YOY[', 1:26, ', 2]')
+  ),
+  ParamGeneral = rep(c(paste0('Mu.mN[',1:3,']'), paste0('Mu.mH[',1:3,']'), 'sigma.mN', 'sigma.mH', 
+                       paste0('Mu.gP[',1:2,']'), 'Mu.gSL', 'sigma.gP', 'sigma.gSL', 
+                       paste0('Mu.pp[',1:3,']'), 'Mu.ll', 'sigma.pp', 'sigma.ll',
+                       'Mu.m0', 'sigma.m0',
+                       paste0('marN[1, ', 1:27, ']'), paste0('marN[2, ', 1:27, ']'), paste0('marN[3, ', 1:27, ']'),
+                       paste0('H[1, ', 1:26, ']'), paste0('H[2, ', 1:26, ']'), paste0('H[3, ', 1:26, ']'),
+                       paste0('Off[', 1:26, ']'),  
+                       paste0('YOY[', 1:26, ']')), 2),
+  Sex = rep(c('F', 'M'), each = 232)
+)
+
+## Make subsets of posterior data for different parameters
+post.data <- melt(as.matrix(WB.IPM.TwoSex.trim))
+colnames(post.data) <- c('Sample', 'Parameter', 'Value')
+
+post.data <- merge(post.data, param.match, by = 'Parameter', all.x = T)
+
+sub.data <- subset(post.data, !is.na(Sex) & !is.na(ParamGeneral))
+
+VR.data <- subset(sub.data, ParamGeneral %in% c(paste0('Mu.mN[',1:3,']'), paste0('Mu.mH[',1:3,']'), 'sigma.mN', 'sigma.mH', 
+                                                paste0('Mu.gP[',1:2,']'), 'Mu.gSL', 'sigma.gP', 'sigma.gSL', 
+                                                paste0('Mu.pp[',1:3,']'), 'Mu.ll', 'sigma.pp', 'sigma.ll',
+                                                'Mu.m0', 'sigma.m0'))
+N.data <- subset(sub.data, ParamGeneral %in% c(paste0('marN[1, ', 1:27, ']'), paste0('marN[2, ', 1:27, ']'), paste0('marN[3, ', 1:27, ']')))
+N.data$ParamGeneral <- factor(N.data$ParamGeneral, levels = c(paste0('marN[1, ', 1:27, ']'), paste0('marN[2, ', 1:27, ']'), paste0('marN[3, ', 1:27, ']')))
+
+H.data <- subset(sub.data, ParamGeneral %in% c(paste0('H[1, ', 1:27, ']'), paste0('H[2, ', 1:27, ']'), paste0('H[3, ', 1:27, ']')))
+H.data$ParamGeneral <- factor(H.data$ParamGeneral, levels = c(paste0('H[1, ', 1:27, ']'), paste0('H[2, ', 1:27, ']'), paste0('H[3, ', 1:27, ']')))
+
+Off.data <- subset(sub.data, ParamGeneral %in% c(paste0('Off[', 1:26, ']')))
+Off.data$ParamGeneral <- factor(Off.data$ParamGeneral, levels = c(paste0('Off[', 1:26, ']')))
+
+YOY.data <- subset(sub.data, ParamGeneral %in% c(paste0('YOY[', 1:26, ']')))
+YOY.data$ParamGeneral <- factor(YOY.data$ParamGeneral, levels = c(paste0('YOY[', 1:26, ']')))
+
+## Plot overlap between male and female parameters
+
+# Vital rates
+ggplot(VR.data, aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
+
+# Population size (class 1)
+ggplot(subset(N.data, ParamGeneral%in%c(paste0('marN[1, ', 1:27, ']'))), aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
+
+# Population size (class 2)
+ggplot(subset(N.data, ParamGeneral%in%c(paste0('marN[2, ', 1:27, ']'))), aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
+
+# Population size (class 3)
+ggplot(subset(N.data, ParamGeneral%in%c(paste0('marN[3, ', 1:27, ']'))), aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
+
+# Harvest (class 1)
+ggplot(subset(H.data, ParamGeneral%in%c(paste0('H[1, ', 1:27, ']'))), aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
+
+# Harvest (class 2)
+ggplot(subset(H.data, ParamGeneral%in%c(paste0('H[2, ', 1:27, ']'))), aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
+
+# Harvest (class 3)
+ggplot(subset(H.data, ParamGeneral%in%c(paste0('H[3, ', 1:27, ']'))), aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
+
+# Offspring 
+ggplot(subset(Off.data, ParamGeneral%in%c(paste0('Off[', 1:26, ']'))), aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
+
+# YOY
+ggplot(YOY.data, aes(x = Value, group = Sex)) +
+  geom_density(aes(color = Sex, fill = Sex), alpha = 0.5) +
+  facet_wrap(~ ParamGeneral, scale = 'free') +
+  theme_bw()
